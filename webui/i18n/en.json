@@ -86,6 +86,31 @@
     "Hide Log": "Hide Log",
     "Upload Local Files": "Upload Local Files",
     "File Uploaded Successfully": "File Uploaded Successfully",
-    "Frame Interval (seconds)": "Frame Interval (seconds) (More keyframes consume more tokens)"
+    "Frame Interval (seconds)": "Frame Interval (seconds) (More keyframes consume more tokens)",
+    "Video Analysis Mode": "Video Analysis Mode",
+    "Frame Extraction Mode": "Frame Extraction",
+    "Direct Upload Mode": "Direct Upload",
+    "Frame mode extracts keyframes locally and analyzes them in batches. Direct mode uploads the entire video file to Gemini for one-shot analysis.": "Frame mode extracts keyframes locally and analyzes them in batches. Direct mode uploads the entire video to an official LLM (Gemini / Qwen-VL) for one-shot analysis.",
+    "Official": "Official",
+    "Direct Video Provider": "Direct Video Provider",
+    "Choose the official API used to analyze the uploaded video. Gemini uploads the file via Files API. Qwen-VL uses DashScope multimodal conversation.": "Choose the official API used to analyze the uploaded video. Gemini uploads the file via Files API. Qwen-VL uses DashScope multimodal conversation.",
+    "Gemini mode uploads the whole video to Google's Files API and lets the model analyze it in one shot. Make sure the network can reach Google APIs.": "Gemini mode uploads the whole video to Google's Files API and lets the model analyze it in one shot. Make sure the network can reach Google APIs.",
+    "Qwen-VL mode uses DashScope multimodal conversation to send the local video file to Tongyi Qwen-VL. Make sure the local file path is reachable for the SDK.": "Qwen-VL mode uses DashScope multimodal conversation to send the local video file to Tongyi Qwen-VL. Make sure the local file path is reachable for the SDK.",
+    "Gemini Video Model Name": "Gemini Video Model Name",
+    "Gemini Video API Key": "Gemini Video API Key",
+    "Qwen-VL Video Model Name": "Qwen-VL Video Model Name",
+    "Qwen-VL Video API Key": "Qwen-VL Video API Key",
+    "Direct video analysis settings saved": "Direct video analysis settings saved",
+    "Please enter API Key first": "Please enter the API Key first",
+    "Please enter model name first": "Please enter the model name first",
+    "Please enter Base URL first": "Please enter the Base URL first",
+    "Please enter Gemini API Key first": "Please enter the Gemini API Key first",
+    "Please enter Gemini model name first": "Please enter the Gemini model name first",
+    "Please enter Qwen API Key first": "Please enter the Qwen-VL API Key first",
+    "Please enter Qwen model name first": "Please enter the Qwen-VL model name first",
+    "Testing connection...": "Testing connection..."
   }
 }
+
+
+

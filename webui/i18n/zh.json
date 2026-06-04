@@ -163,6 +163,31 @@
     "Batch Size (More keyframes consume more tokens)": "批处理大小, 每批处理越少消耗 token 越多",
     "Short Drama Summary": "短剧解说",
     "Video Type": "视频类型",
-    "Select/Upload Script": "选择/上传脚本"
+    "Select/Upload Script": "选择/上传脚本",
+    "Video Analysis Mode": "视频分析模式",
+    "Frame Extraction Mode": "抽帧分析",
+    "Direct Upload Mode": "直接上传分析",
+    "Frame mode extracts keyframes locally and analyzes them in batches. Direct mode uploads the entire video file to Gemini for one-shot analysis.": "抽帧模式：本地抽取关键帧后分批送入视觉模型分析。直接上传模式：把完整视频送给官方原生大模型（Gemini / Qwen-VL）一次性分析。",
+    "Official": "官方",
+    "Direct Video Provider": "直接分析提供商",
+    "Choose the official API used to analyze the uploaded video. Gemini uploads the file via Files API. Qwen-VL uses DashScope multimodal conversation.": "选择用于分析视频的官方原生 API。Gemini 通过 Files API 上传后分析；Qwen-VL 通过 DashScope 多模态对话上传本地视频文件。",
+    "Gemini mode uploads the whole video to Google's Files API and lets the model analyze it in one shot. Make sure the network can reach Google APIs.": "Gemini 模式会把完整视频上传到 Google Files API，由模型一次性观看分析。请确认网络可访问 Google API。",
+    "Qwen-VL mode uses DashScope multimodal conversation to send the local video file to Tongyi Qwen-VL. Make sure the local file path is reachable for the SDK.": "Qwen-VL 模式通过阿里 DashScope 多模态对话把本地视频文件送给通义千问 Qwen-VL，请确认本地视频路径对 SDK 可访问。",
+    "Gemini Video Model Name": "Gemini 视频分析模型名称",
+    "Gemini Video API Key": "Gemini 视频分析 API Key",
+    "Qwen-VL Video Model Name": "Qwen-VL 视频分析模型名称",
+    "Qwen-VL Video API Key": "Qwen-VL 视频分析 API Key",
+    "Direct video analysis settings saved": "「直接上传分析」设置已保存",
+    "Please enter API Key first": "请先输入 API Key",
+    "Please enter model name first": "请先输入模型名称",
+    "Please enter Base URL first": "请先输入接口地址",
+    "Please enter Gemini API Key first": "请先输入 Gemini API Key",
+    "Please enter Gemini model name first": "请先输入 Gemini 模型名称",
+    "Please enter Qwen API Key first": "请先输入 Qwen-VL API Key",
+    "Please enter Qwen model name first": "请先输入 Qwen-VL 模型名称",
+    "Testing connection...": "正在测试连接..."
   }
 }
+
+
+

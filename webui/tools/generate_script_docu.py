@@ -8,7 +8,61 @@ import streamlit as st
 from loguru import logger
 
 from app.config import config
+from app.config.defaults import (
+    DEFAULT_DIRECT_VIDEO_PROVIDER,
+    DEFAULT_HIGHLIGHT_CLIP_MAX_SECONDS,
+    DEFAULT_HIGHLIGHT_CLIP_MIN_SECONDS,
+    DEFAULT_HIGHLIGHT_DENSITY_PER_MINUTE,
+    DEFAULT_HIGHLIGHT_MODE_ENABLED,
+    DEFAULT_VIDEO_ANALYSIS_MODE,
+    DIRECT_VIDEO_PROVIDER_GEMINI,
+    DIRECT_VIDEO_PROVIDER_QWEN,
+)
+from app.services.documentary.direct_video_analysis_service import (
+    DirectVideoAnalysisService,
+)
 from app.services.documentary.frame_analysis_service import DocumentaryFrameAnalysisService
+
+
+def _resolve_highlight_runtime_settings() -> dict:
+    """从 session_state 优先、回退到 config.app 读取精华模式参数。"""
+
+    def _get(key: str, default):
+        if key in st.session_state and st.session_state[key] is not None:
+            return st.session_state[key]
+        value = config.app.get(key)
+        return default if value is None else value
+
+    enabled = _get("highlight_mode_enabled", DEFAULT_HIGHLIGHT_MODE_ENABLED)
+    if isinstance(enabled, str):
+        enabled = enabled.strip().lower() in {"1", "true", "yes", "on"}
+    else:
+        enabled = bool(enabled)
+
+    def _to_float(value, fallback):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(fallback)
+
+    return {
+        "highlight_mode_enabled": enabled,
+        "highlight_clip_min_seconds": _to_float(
+            _get("highlight_clip_min_seconds", DEFAULT_HIGHLIGHT_CLIP_MIN_SECONDS),
+            DEFAULT_HIGHLIGHT_CLIP_MIN_SECONDS,
+        ),
+        "highlight_clip_max_seconds": _to_float(
+            _get("highlight_clip_max_seconds", DEFAULT_HIGHLIGHT_CLIP_MAX_SECONDS),
+            DEFAULT_HIGHLIGHT_CLIP_MAX_SECONDS,
+        ),
+        "highlight_density_per_minute": _to_float(
+            _get("highlight_density_per_minute", DEFAULT_HIGHLIGHT_DENSITY_PER_MINUTE),
+            DEFAULT_HIGHLIGHT_DENSITY_PER_MINUTE,
+        ),
+    }
+
+
+
 
 
 def _normalize_progress_value(progress: float | int) -> int:
@@ -24,11 +78,27 @@ def _normalize_progress_value(progress: float | int) -> int:
     return max(0, min(100, int(round(value))))
 
 
+def _resolve_video_analysis_mode() -> str:
+    """获取当前选中的影片分析模式。session_state 优先，回退到持久化配置。"""
+    mode = (
+        st.session_state.get("video_analysis_mode")
+        or config.app.get("video_analysis_mode")
+        or DEFAULT_VIDEO_ANALYSIS_MODE
+    )
+    if mode not in ("frames", "direct"):
+        mode = DEFAULT_VIDEO_ANALYSIS_MODE
+    return mode
+
+
 def generate_script_docu(params):
     """
     生成纪录片视频脚本。
     要求: 原视频无字幕无配音
     适合场景: 纪录片、动物搞笑解说、荒野建造等
+
+    根据「基础设置 → 视频分析模式」决定走哪条链路：
+        - frames: 抽取关键帧，分批送入 OpenAI 兼容视觉模型
+        - direct: 整段视频上传至 Gemini File API，一次性产出脚本
     """
     progress_bar = st.progress(0)
     status_text = st.empty()
@@ -47,52 +117,13 @@ def generate_script_docu(params):
                 st.error("请先选择视频文件")
                 return
 
-            vision_llm_provider = (
-                st.session_state.get("vision_llm_provider") or config.app.get("vision_llm_provider", "openai")
-            ).lower()
-            vision_api_key = (
-                st.session_state.get(f"vision_{vision_llm_provider}_api_key")
-                or config.app.get(f"vision_{vision_llm_provider}_api_key")
-            )
-            vision_model = (
-                st.session_state.get(f"vision_{vision_llm_provider}_model_name")
-                or config.app.get(f"vision_{vision_llm_provider}_model_name")
-            )
-            vision_base_url = (
-                st.session_state.get(f"vision_{vision_llm_provider}_base_url")
-                or config.app.get(f"vision_{vision_llm_provider}_base_url", "")
-            )
-            if not vision_api_key or not vision_model:
-                raise ValueError(
-                    f"未配置 {vision_llm_provider} 的 API Key 或模型名称。"
-                    f"请在设置页面配置 vision_{vision_llm_provider}_api_key 和 vision_{vision_llm_provider}_model_name"
-                )
+            analysis_mode = _resolve_video_analysis_mode()
+            logger.info(f"使用视频分析模式: {analysis_mode}")
 
-            frame_interval_input = st.session_state.get("frame_interval_input") or config.frames.get(
-                "frame_interval_input", 3
-            )
-            vision_batch_size = st.session_state.get("vision_batch_size") or config.frames.get("vision_batch_size", 10)
-            vision_max_concurrency = st.session_state.get("vision_max_concurrency") or config.frames.get(
-                "vision_max_concurrency", 2
-            )
-
-            update_progress(10, "正在提取关键帧...")
-            service = DocumentaryFrameAnalysisService()
-            script_items = asyncio.run(
-                service.generate_documentary_script(
-                    video_path=params.video_origin_path,
-                    video_theme=st.session_state.get("video_theme", ""),
-                    custom_prompt=st.session_state.get("custom_prompt", ""),
-                    frame_interval_input=frame_interval_input,
-                    vision_batch_size=vision_batch_size,
-                    vision_llm_provider=vision_llm_provider,
-                    progress_callback=update_progress,
-                    vision_api_key=vision_api_key,
-                    vision_model_name=vision_model,
-                    vision_base_url=vision_base_url,
-                    max_concurrency=vision_max_concurrency,
-                )
-            )
+            if analysis_mode == "direct":
+                script_items = _run_direct_mode(params, update_progress)
+            else:
+                script_items = _run_frames_mode(params, update_progress)
 
             logger.info(f"纪录片解说脚本生成完成，共 {len(script_items)} 个片段")
             script = json.dumps(script_items, ensure_ascii=False, indent=2)
@@ -114,3 +145,108 @@ def generate_script_docu(params):
         time.sleep(2)
         progress_bar.empty()
         status_text.empty()
+
+
+def _run_frames_mode(params, update_progress) -> list[dict]:
+    """抽帧分析模式：保留原有 OpenAI 兼容视觉链路。"""
+    vision_llm_provider = (
+        st.session_state.get("vision_llm_provider")
+        or config.app.get("vision_llm_provider", "openai")
+    ).lower()
+    vision_api_key = (
+        st.session_state.get(f"vision_{vision_llm_provider}_api_key")
+        or config.app.get(f"vision_{vision_llm_provider}_api_key")
+    )
+    vision_model = (
+        st.session_state.get(f"vision_{vision_llm_provider}_model_name")
+        or config.app.get(f"vision_{vision_llm_provider}_model_name")
+    )
+    vision_base_url = (
+        st.session_state.get(f"vision_{vision_llm_provider}_base_url")
+        or config.app.get(f"vision_{vision_llm_provider}_base_url", "")
+    )
+    if not vision_api_key or not vision_model:
+        raise ValueError(
+            f"未配置 {vision_llm_provider} 的 API Key 或模型名称。"
+            f"请在设置页面配置 vision_{vision_llm_provider}_api_key 和 vision_{vision_llm_provider}_model_name"
+        )
+
+    frame_interval_input = st.session_state.get("frame_interval_input") or config.frames.get(
+        "frame_interval_input", 3
+    )
+    vision_batch_size = st.session_state.get("vision_batch_size") or config.frames.get("vision_batch_size", 10)
+    vision_max_concurrency = st.session_state.get("vision_max_concurrency") or config.frames.get(
+        "vision_max_concurrency", 2
+    )
+
+    update_progress(10, "正在提取关键帧...")
+    service = DocumentaryFrameAnalysisService()
+    return asyncio.run(
+        service.generate_documentary_script(
+            video_path=params.video_origin_path,
+            video_theme=st.session_state.get("video_theme", ""),
+            custom_prompt=st.session_state.get("custom_prompt", ""),
+            frame_interval_input=frame_interval_input,
+            vision_batch_size=vision_batch_size,
+            vision_llm_provider=vision_llm_provider,
+            progress_callback=update_progress,
+            vision_api_key=vision_api_key,
+            vision_model_name=vision_model,
+            vision_base_url=vision_base_url,
+            max_concurrency=vision_max_concurrency,
+        )
+    )
+
+
+def _run_direct_mode(params, update_progress) -> list[dict]:
+    """直接上传分析模式：把整段视频交给官方原生大模型（Gemini / Qwen-VL）。"""
+    provider = (
+        st.session_state.get("direct_video_provider")
+        or config.app.get("direct_video_provider")
+        or DEFAULT_DIRECT_VIDEO_PROVIDER
+    ).lower()
+    if provider not in (DIRECT_VIDEO_PROVIDER_GEMINI, DIRECT_VIDEO_PROVIDER_QWEN):
+        provider = DEFAULT_DIRECT_VIDEO_PROVIDER
+
+    if provider == DIRECT_VIDEO_PROVIDER_GEMINI:
+        api_key = config.app.get("direct_video_gemini_api_key", "")
+        model_name = config.app.get("direct_video_gemini_model_name", "")
+        human = "Gemini"
+    else:
+        api_key = config.app.get("direct_video_qwen_api_key", "")
+        model_name = config.app.get("direct_video_qwen_model_name", "")
+        human = "Qwen-VL"
+
+    if not api_key:
+        raise ValueError(
+            f"未配置 {human} 的 API Key。"
+            f"请在「基础设置 → 视频分析模式 → 直接上传分析」中切换到 {human} 并填写 API Key"
+        )
+
+    highlight_settings = _resolve_highlight_runtime_settings()
+    if highlight_settings["highlight_mode_enabled"]:
+        update_progress(
+            5,
+            f"已切换为「直接上传分析（{human}） · 精华精选」模式 "
+            f"({highlight_settings['highlight_clip_min_seconds']:.1f}-"
+            f"{highlight_settings['highlight_clip_max_seconds']:.1f}s/段)",
+        )
+    else:
+        update_progress(5, f"已切换为「直接上传分析（{human}） · 全片均匀切片」模式")
+
+    service = DirectVideoAnalysisService()
+    # 同步调用：保留 progress_callback 在 Streamlit 主线程中执行，避免 NoSessionContext
+    return service.generate_script(
+        video_path=params.video_origin_path,
+        video_theme=st.session_state.get("video_theme", ""),
+        custom_prompt=st.session_state.get("custom_prompt", ""),
+        provider=provider,
+        api_key=api_key,
+        model_name=model_name,
+        progress_callback=update_progress,
+        **highlight_settings,
+    )
+
+
+
+

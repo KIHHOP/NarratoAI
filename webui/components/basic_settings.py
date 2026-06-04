@@ -4,15 +4,29 @@ import streamlit as st
 import os
 from app.config import config
 from app.config.defaults import (
+    DEFAULT_DIRECT_VIDEO_GEMINI_MODEL_NAME,
+    DEFAULT_DIRECT_VIDEO_PROVIDER,
+    DEFAULT_DIRECT_VIDEO_QWEN_MODEL_NAME,
+    DEFAULT_HIGHLIGHT_CLIP_MAX_SECONDS,
+    DEFAULT_HIGHLIGHT_CLIP_MIN_SECONDS,
+    DEFAULT_HIGHLIGHT_DENSITY_PER_MINUTE,
+    DEFAULT_HIGHLIGHT_MODE_ENABLED,
     DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
     DEFAULT_OPENAI_COMPATIBLE_PROVIDER,
     DEFAULT_TEXT_LLM_PROVIDER,
     DEFAULT_TEXT_OPENAI_MODEL_NAME,
+    DEFAULT_VIDEO_ANALYSIS_MODE,
     DEFAULT_VISION_LLM_PROVIDER,
     DEFAULT_VISION_OPENAI_MODEL_NAME,
+    DIRECT_VIDEO_PROVIDER_GEMINI,
+    DIRECT_VIDEO_PROVIDER_QWEN,
     get_openai_compatible_ui_values,
     normalize_openai_compatible_model_name as normalize_openai_compatible_model_id,
 )
+
+
+
+
 from app.utils import utils
 from loguru import logger
 from app.services.llm.unified_service import UnifiedLLMService
@@ -434,12 +448,404 @@ def test_openai_compatible_text_model(api_key: str, base_url: str, model_name: s
             return False, "超出速率限制，请稍后重试"
         return False, f"连接失败: {error_msg}"
 
+def _render_video_analysis_mode_switch(tr) -> str:
+    """渲染影片分析模式开关，返回当前选中的模式（frames / direct）。"""
+    current_mode = config.app.get("video_analysis_mode") or DEFAULT_VIDEO_ANALYSIS_MODE
+    if current_mode not in ("frames", "direct"):
+        current_mode = DEFAULT_VIDEO_ANALYSIS_MODE
+
+    mode_options = {
+        tr("Frame Extraction Mode"): "frames",
+        tr("Direct Upload Mode"): "direct",
+    }
+    label_keys = list(mode_options.keys())
+    current_label = next((label for label, value in mode_options.items() if value == current_mode), label_keys[0])
+
+    selected_label = st.radio(
+        tr("Video Analysis Mode"),
+        options=label_keys,
+        index=label_keys.index(current_label),
+        horizontal=True,
+        help=tr(
+            "Frame mode extracts keyframes locally and analyzes them in batches. "
+            "Direct mode uploads the entire video file to Gemini for one-shot analysis."
+        ),
+        key="video_analysis_mode_radio",
+    )
+
+    selected_mode = mode_options[selected_label]
+    if selected_mode != current_mode:
+        config.app["video_analysis_mode"] = selected_mode
+        try:
+            config.save_config()
+        except Exception as exc:
+            logger.error(f"保存影片分析模式失败: {exc}")
+    else:
+        config.app["video_analysis_mode"] = selected_mode
+
+    st.session_state["video_analysis_mode"] = selected_mode
+    return selected_mode
+
+
+def _render_direct_video_provider_switch(tr) -> str:
+    """渲染「直接上传分析」的 provider 切换（gemini / qwen），返回当前选中的 provider。"""
+    current_provider = (
+        config.app.get("direct_video_provider") or DEFAULT_DIRECT_VIDEO_PROVIDER
+    ).lower()
+    if current_provider not in (DIRECT_VIDEO_PROVIDER_GEMINI, DIRECT_VIDEO_PROVIDER_QWEN):
+        current_provider = DEFAULT_DIRECT_VIDEO_PROVIDER
+
+    provider_options = {
+        f"Gemini ({tr('Official')})": DIRECT_VIDEO_PROVIDER_GEMINI,
+        f"Qwen-VL ({tr('Official')})": DIRECT_VIDEO_PROVIDER_QWEN,
+    }
+    label_keys = list(provider_options.keys())
+    current_label = next(
+        (label for label, value in provider_options.items() if value == current_provider),
+        label_keys[0],
+    )
+
+    selected_label = st.radio(
+        tr("Direct Video Provider"),
+        options=label_keys,
+        index=label_keys.index(current_label),
+        horizontal=True,
+        help=tr(
+            "Choose the official API used to analyze the uploaded video. "
+            "Gemini uploads the file via Files API. Qwen-VL uses DashScope multimodal conversation."
+        ),
+        key="direct_video_provider_radio",
+    )
+
+    selected_provider = provider_options[selected_label]
+    if selected_provider != current_provider:
+        config.app["direct_video_provider"] = selected_provider
+        try:
+            config.save_config()
+        except Exception as exc:
+            logger.error(f"保存 direct_video_provider 失败: {exc}")
+    else:
+        config.app["direct_video_provider"] = selected_provider
+
+    st.session_state["direct_video_provider"] = selected_provider
+    return selected_provider
+
+
+def _render_gemini_direct_video_settings(tr) -> None:
+    """渲染 Gemini 官方原生 API 的配置面板。"""
+    api_key = config.app.get("direct_video_gemini_api_key", "")
+    model_name = config.app.get("direct_video_gemini_model_name") or DEFAULT_DIRECT_VIDEO_GEMINI_MODEL_NAME
+
+    st.info(
+        tr(
+            "Gemini mode uploads the whole video to Google's Files API and lets the model "
+            "analyze it in one shot. Make sure the network can reach Google APIs."
+        )
+    )
+
+    st_model = st.text_input(
+        tr("Gemini Video Model Name"),
+        value=model_name,
+        help="支持视频理解的 Gemini 模型，例如：gemini-2.0-flash-exp、gemini-1.5-pro",
+        key="direct_video_gemini_model_input",
+    )
+    st_api_key = st.text_input(
+        tr("Gemini Video API Key"),
+        value=api_key,
+        type="password",
+        help="Gemini API Key 获取地址：https://makersuite.google.com/app/apikey",
+        key="direct_video_gemini_api_key_input",
+    )
+
+    if st.button(tr("Test Connection"), key="test_direct_video_gemini_connection"):
+        if not st_api_key:
+            st.error(tr("Please enter Gemini API Key first"))
+        elif not st_model:
+            st.error(tr("Please enter Gemini model name first"))
+        else:
+            with st.spinner(tr("Testing connection...")):
+                ok, message = _test_gemini_native(api_key=st_api_key, model_name=st_model)
+                if ok:
+                    st.success(message)
+                else:
+                    st.error(message)
+
+    config_changed = False
+    if st_model and st_model.strip() != (model_name or "").strip():
+        config.app["direct_video_gemini_model_name"] = st_model.strip()
+        config_changed = True
+    if st_api_key and st_api_key != api_key:
+        is_valid, error_msg = validate_api_key(st_api_key, "Gemini 视频分析")
+        if is_valid:
+            config.app["direct_video_gemini_api_key"] = st_api_key
+            config_changed = True
+        else:
+            st.error(error_msg)
+
+    if config_changed:
+        try:
+            config.save_config()
+            st.success(tr("Direct video analysis settings saved"))
+        except Exception as exc:
+            st.error(f"保存配置失败: {exc}")
+            logger.error(f"保存 Gemini 直接视频分析配置失败: {exc}")
+
+
+def _render_qwen_direct_video_settings(tr) -> None:
+    """渲染 Qwen-VL（DashScope）官方 API 的配置面板。"""
+    api_key = config.app.get("direct_video_qwen_api_key", "")
+    model_name = config.app.get("direct_video_qwen_model_name") or DEFAULT_DIRECT_VIDEO_QWEN_MODEL_NAME
+
+    st.info(
+        tr(
+            "Qwen-VL mode uses DashScope multimodal conversation to send the local video file "
+            "to Tongyi Qwen-VL. Make sure the local file path is reachable for the SDK."
+        )
+    )
+
+    st_model = st.text_input(
+        tr("Qwen-VL Video Model Name"),
+        value=model_name,
+        help="支持视频理解的通义 Qwen-VL 模型，例如：qwen-vl-max-latest、qwen-vl-plus、qwen2.5-vl-72b-instruct",
+        key="direct_video_qwen_model_input",
+    )
+    st_api_key = st.text_input(
+        tr("Qwen-VL Video API Key"),
+        value=api_key,
+        type="password",
+        help="阿里百炼 / DashScope API Key 获取地址：https://bailian.console.aliyun.com/?tab=model#/api-key",
+        key="direct_video_qwen_api_key_input",
+    )
+
+    if st.button(tr("Test Connection"), key="test_direct_video_qwen_connection"):
+        if not st_api_key:
+            st.error(tr("Please enter Qwen API Key first"))
+        elif not st_model:
+            st.error(tr("Please enter Qwen model name first"))
+        else:
+            with st.spinner(tr("Testing connection...")):
+                ok, message = _test_qwen_native(api_key=st_api_key, model_name=st_model)
+                if ok:
+                    st.success(message)
+                else:
+                    st.error(message)
+
+    config_changed = False
+    if st_model and st_model.strip() != (model_name or "").strip():
+        config.app["direct_video_qwen_model_name"] = st_model.strip()
+        config_changed = True
+    if st_api_key and st_api_key != api_key:
+        is_valid, error_msg = validate_api_key(st_api_key, "Qwen 视频分析")
+        if is_valid:
+            config.app["direct_video_qwen_api_key"] = st_api_key
+            config_changed = True
+        else:
+            st.error(error_msg)
+
+    if config_changed:
+        try:
+            config.save_config()
+            st.success(tr("Direct video analysis settings saved"))
+        except Exception as exc:
+            st.error(f"保存配置失败: {exc}")
+            logger.error(f"保存 Qwen 直接视频分析配置失败: {exc}")
+
+
+def _render_highlight_settings(tr) -> None:
+    """渲染「精华精选」模式参数面板。
+
+    放在「直接上传分析」配置下面，仅对 direct 模式生效。
+    把 session_state 与 config.app 双向同步，方便 generate_script_docu 直接读取。
+    """
+    # 读当前值（session_state 优先，回退到 config.app，再回退到默认值）
+    enabled = st.session_state.get(
+        "highlight_mode_enabled",
+        bool(config.app.get("highlight_mode_enabled", DEFAULT_HIGHLIGHT_MODE_ENABLED)),
+    )
+    clip_min = float(st.session_state.get(
+        "highlight_clip_min_seconds",
+        config.app.get("highlight_clip_min_seconds", DEFAULT_HIGHLIGHT_CLIP_MIN_SECONDS),
+    ))
+    clip_max = float(st.session_state.get(
+        "highlight_clip_max_seconds",
+        config.app.get("highlight_clip_max_seconds", DEFAULT_HIGHLIGHT_CLIP_MAX_SECONDS),
+    ))
+    density = float(st.session_state.get(
+        "highlight_density_per_minute",
+        config.app.get("highlight_density_per_minute", DEFAULT_HIGHLIGHT_DENSITY_PER_MINUTE),
+    ))
+
+    st.markdown("---")
+    st.caption(tr("Highlight Curation"))
+
+    new_enabled = st.checkbox(
+        tr("Enable Highlight Mode"),
+        value=enabled,
+        help=tr(
+            "When enabled, the model watches the full video and only picks the most exciting "
+            "moments. When disabled, it falls back to evenly slicing the whole video."
+        ),
+        key="highlight_mode_enabled_input",
+    )
+
+    cols = st.columns(3)
+    with cols[0]:
+        new_clip_min = st.number_input(
+            tr("Min clip seconds"),
+            min_value=0.5,
+            max_value=30.0,
+            value=float(clip_min),
+            step=0.5,
+            help=tr("Lower bound of each highlight clip duration"),
+            key="highlight_clip_min_seconds_input",
+            disabled=not new_enabled,
+        )
+    with cols[1]:
+        new_clip_max = st.number_input(
+            tr("Max clip seconds"),
+            min_value=0.5,
+            max_value=30.0,
+            value=float(clip_max),
+            step=0.5,
+            help=tr("Upper bound of each highlight clip duration"),
+            key="highlight_clip_max_seconds_input",
+            disabled=not new_enabled,
+        )
+    with cols[2]:
+        new_density = st.number_input(
+            tr("Highlights per minute"),
+            min_value=0.5,
+            max_value=30.0,
+            value=float(density),
+            step=0.5,
+            help=tr("Target number of highlight clips per minute of source footage"),
+            key="highlight_density_per_minute_input",
+            disabled=not new_enabled,
+        )
+
+    if new_clip_max < new_clip_min:
+        st.warning(tr("Max clip seconds is smaller than min, will be clamped at runtime."))
+
+    # 同步到 session_state 和 config.app
+    changed = (
+        new_enabled != enabled
+        or abs(new_clip_min - clip_min) > 1e-6
+        or abs(new_clip_max - clip_max) > 1e-6
+        or abs(new_density - density) > 1e-6
+    )
+
+    st.session_state["highlight_mode_enabled"] = bool(new_enabled)
+    st.session_state["highlight_clip_min_seconds"] = float(new_clip_min)
+    st.session_state["highlight_clip_max_seconds"] = float(new_clip_max)
+    st.session_state["highlight_density_per_minute"] = float(new_density)
+
+    config.app["highlight_mode_enabled"] = bool(new_enabled)
+    config.app["highlight_clip_min_seconds"] = float(new_clip_min)
+    config.app["highlight_clip_max_seconds"] = float(new_clip_max)
+    config.app["highlight_density_per_minute"] = float(new_density)
+
+    if changed:
+        try:
+            config.save_config()
+        except Exception as exc:  # pragma: no cover
+            logger.error(f"保存精华模式参数失败: {exc}")
+
+
+def render_direct_video_analysis_settings(tr):
+    """渲染「直接上传分析」的官方 API 配置（Gemini / Qwen-VL 二选一）。"""
+    selected_provider = _render_direct_video_provider_switch(tr)
+    if selected_provider == DIRECT_VIDEO_PROVIDER_GEMINI:
+        _render_gemini_direct_video_settings(tr)
+    else:
+        _render_qwen_direct_video_settings(tr)
+
+    # 精华模式参数（对两种 provider 都生效）
+    _render_highlight_settings(tr)
+
+
+
+def _test_gemini_native(api_key: str, model_name: str) -> tuple[bool, str]:
+    """用 Gemini 新版官方 SDK（google-genai）做一次轻量文本调用以验证 API Key/模型可用。"""
+    try:
+        from google import genai as google_genai
+        from google.genai import types as genai_types
+    except ImportError:
+        return False, "未安装 google-genai，请执行：pip install google-genai"
+
+    try:
+        client = google_genai.Client(api_key=api_key)
+        response = client.models.generate_content(
+            model=model_name,
+            contents="请直接回复'连接成功'",
+            config=genai_types.GenerateContentConfig(temperature=0.1),
+        )
+        text = (getattr(response, "text", "") or "").strip()
+        if text:
+            return True, f"Gemini 视频模型连接成功（{model_name}）"
+        return False, "Gemini 返回空响应"
+    except Exception as exc:
+        msg = str(exc)
+        logger.error(f"Gemini 视频模型测试失败: {msg}")
+        if "api key" in msg.lower() or "permission" in msg.lower() or "invalid" in msg.lower():
+            return False, "认证失败，请检查 API Key 是否正确"
+        if "not found" in msg.lower() or "404" in msg:
+            return False, "模型不存在，请检查模型名称"
+        return False, f"连接失败: {msg}"
+
+
+
+def _test_qwen_native(api_key: str, model_name: str) -> tuple[bool, str]:
+    """用 DashScope MultiModalConversation 做一次纯文本调用验证 API Key/模型可用。"""
+    try:
+        from dashscope import MultiModalConversation
+    except ImportError:
+        return False, "未安装 dashscope，请确认依赖完整"
+
+    try:
+        response = MultiModalConversation.call(
+            api_key=api_key,
+            model=model_name,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"text": "请直接回复'连接成功'"}],
+                }
+            ],
+        )
+        status_code = getattr(response, "status_code", None)
+        if status_code is not None and status_code != 200:
+            err_code = getattr(response, "code", "")
+            err_msg = getattr(response, "message", "")
+            return False, f"Qwen-VL 调用失败 (status={status_code}, code={err_code}): {err_msg}"
+        return True, f"Qwen-VL 模型连接成功（{model_name}）"
+    except Exception as exc:
+        msg = str(exc)
+        logger.error(f"Qwen-VL 模型测试失败: {msg}")
+        if "api key" in msg.lower() or "auth" in msg.lower() or "invalid" in msg.lower():
+            return False, "认证失败，请检查 API Key 是否正确"
+        if "model" in msg.lower() and ("not" in msg.lower() or "404" in msg):
+            return False, "模型不存在，请检查模型名称"
+        return False, f"连接失败: {msg}"
+
+
+
+
 def render_vision_llm_settings(tr):
-    """渲染视频分析模型设置（OpenAI 兼容 统一配置）"""
+    """渲染视频分析模型设置（支持「抽帧分析」与「直接上传分析」两种模式）"""
     st.subheader(tr("Vision Model Settings"))
 
+    # 影片分析模式开关
+    selected_mode = _render_video_analysis_mode_switch(tr)
+
+    # 直接上传模式：渲染 Gemini File API 配置后直接返回
+    if selected_mode == "direct":
+        render_direct_video_analysis_settings(tr)
+        return
+
+    # 抽帧模式：维持原有 OpenAI 兼容配置
     # 固定使用 OpenAI 兼容 提供商
     config.app["vision_llm_provider"] = DEFAULT_VISION_LLM_PROVIDER
+
 
     # 获取已保存的配置
     full_vision_model_name = config.app.get("vision_openai_model_name") or DEFAULT_VISION_OPENAI_MODEL_NAME
